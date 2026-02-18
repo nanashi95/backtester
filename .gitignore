@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.env
+.venv
+venv/
+
+# Project outputs (generated artifacts)
+output/
+cache/
+equity_curve.csv
+trades.csv
+metrics_summary.txt
+
+# Claude session data
+.claude/
