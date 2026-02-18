@@ -51,6 +51,15 @@ def compute_all_metrics(equity_curve: pd.DataFrame,
     # ── MAR ratio ────────────────────────────────────────────────────────────
     metrics["mar_ratio"] = (cagr / abs(max_dd)) if max_dd != 0 else np.nan
 
+    # ── Sharpe ratio (annualised, risk-free rate = 0) ─────────────────────────
+    eq_daily    = eq.resample("D").last().ffill()
+    daily_rets  = eq_daily.pct_change().dropna()
+    if len(daily_rets) > 1 and daily_rets.std() > 0:
+        sharpe = float(daily_rets.mean() / daily_rets.std() * np.sqrt(252))
+    else:
+        sharpe = np.nan
+    metrics["sharpe"] = sharpe
+
     # ── Longest time underwater ───────────────────────────────────────────────
     # "Underwater" = equity below previous all-time high
     at_high = eq >= rolling_max * 0.9999  # tolerance for float equality
@@ -184,6 +193,9 @@ def format_report(metrics: Dict[str, Any]) -> str:
     lines.append(f"  CAGR                    : {metrics['cagr']*100:>8.2f}%")
     lines.append(f"  Max Drawdown            : {metrics['max_drawdown']*100:>8.2f}%")
     lines.append(f"  MAR Ratio               : {metrics.get('mar_ratio', 0):>8.2f}x")
+    sharpe = metrics.get("sharpe", float("nan"))
+    sharpe_str = f"{sharpe:>8.2f}" if not np.isnan(sharpe) else "     nan"
+    lines.append(f"  Sharpe Ratio            : {sharpe_str}")
     lines.append(f"  Longest Underwater      : {metrics['longest_underwater_days']:>8d} days")
     lines.append(f"  Worst 12-month Return   : {metrics['worst_12m_return']*100:>8.2f}%")
 

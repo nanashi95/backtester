@@ -3,15 +3,16 @@ main.py
 -------
 Entry point for the trend-following backtest engine.
 
-Runs all registered strategies and prints a side-by-side comparison table.
+Runs registered strategies in Mode A (ideal robot) and Mode B (human executable)
+and prints a side-by-side comparison with Mode B cancellation/delay statistics.
 
 Usage:
     python main.py
 
-Outputs (per strategy):
-    - output/{strategy_name}/equity_curve.csv
-    - output/{strategy_name}/trades.csv
-    - output/{strategy_name}/metrics_summary.txt
+Outputs (per strategy × mode):
+    - output/{slug}/equity_curve.csv
+    - output/{slug}/trades.csv
+    - output/{slug}/metrics_summary.txt
 
 Comparison:
     - output/comparison.txt
@@ -23,7 +24,6 @@ import re
 import time
 import pandas as pd
 
-# Allow imports from project root
 sys.path.insert(0, os.path.dirname(__file__))
 
 from strategies import STRATEGIES
@@ -32,20 +32,19 @@ from metrics.metrics_engine import compute_all_metrics, format_report
 
 
 def _slug(name: str) -> str:
-    """Convert strategy display name to filesystem-safe slug."""
     return re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
 
 
-def run_strategy(strategy, start, end, initial_equity, instruments=None):
-    """Run a single strategy and return (metrics, equity_curve, trades_df)."""
+def run_strategy(strategy, start, end, initial_equity, instruments=None, mode="A"):
+    """Run a single strategy in the given mode. Returns (metrics, equity_curve, trades_df, engine)."""
     cfg = strategy.config()
     print(f"\n{'=' * 60}")
-    print(f"  STRATEGY: {cfg.name}")
-    print(f"  Period: {start} -> {end}")
-    print(f"  ATR({cfg.atr_period}) | Stop: {cfg.atr_initial_stop}x/{cfg.atr_trailing_stop}x"
-          f" | Reversal exit: {'ON' if cfg.use_reversal_exit else 'OFF'}")
+    print(f"  STRATEGY : {cfg.name}")
+    print(f"  Mode     : {mode} ({'Ideal Robot' if mode == 'A' else 'Human Executable'})")
+    print(f"  Period   : {start} -> {end}")
+    print(f"  ATR({cfg.atr_period}) | Stop: {cfg.atr_initial_stop}x/{cfg.atr_trailing_stop}x")
     if instruments:
-        print(f"  Universe: {len(instruments)} instruments")
+        print(f"  Universe : {len(instruments)} instruments")
     print(f"{'=' * 60}")
 
     engine = PortfolioEngine(
@@ -54,21 +53,21 @@ def run_strategy(strategy, start, end, initial_equity, instruments=None):
         end=end,
         initial_equity=initial_equity,
         instruments=instruments,
+        mode=mode,
     )
 
     equity_curve = engine.run()
     trades_df    = engine.get_trades_df()
 
     print("\nComputing performance metrics...")
-    metrics = compute_all_metrics(equity_curve, trades_df,
-                                  initial_equity=initial_equity)
+    metrics = compute_all_metrics(equity_curve, trades_df, initial_equity=initial_equity)
 
     report = format_report(metrics)
     print(report)
 
-    # Save per-strategy outputs
-    period_tag = f"{start[:4]}_{end[:4]}"
-    slug = f"{_slug(cfg.name)}_{period_tag}"
+    # Save outputs
+    period_tag = f"{start[:4]}{start[5:7]}_{end[:4]}{end[5:7]}"
+    slug = f"{_slug(cfg.name)}_mode{mode}_{period_tag}"
     out_dir = os.path.join("output", slug)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -77,47 +76,85 @@ def run_strategy(strategy, start, end, initial_equity, instruments=None):
         trades_df.to_csv(os.path.join(out_dir, "trades.csv"), index=False)
     with open(os.path.join(out_dir, "metrics_summary.txt"), "w") as f:
         f.write(report)
-        f.write("\n\nRaw metrics dict:\n")
+        f.write("\n\nRaw metrics:\n")
         for k, v in metrics.items():
             if k not in ("underwater_periods", "r_distribution",
                           "bucket_breakdown", "exposure_clustering",
                           "annual_returns", "trades_per_year"):
                 f.write(f"  {k}: {v}\n")
 
-    return metrics, equity_curve, trades_df
+    return metrics, equity_curve, trades_df, engine
 
 
 def format_comparison(all_results):
-    """Build a side-by-side comparison table from collected results."""
+    """Side-by-side comparison table."""
     lines = []
-    lines.append("\n" + "=" * 100)
-    lines.append("  STRATEGY COMPARISON")
-    lines.append("=" * 100)
+    lines.append("\n" + "=" * 118)
+    lines.append("  STRATEGY COMPARISON  (Mode A = Ideal Robot | Mode B = Human Executable)")
+    lines.append("=" * 118)
 
-    # Header
-    header = (f"  {'Strategy':<28s} {'CAGR':>7s} {'MaxDD':>7s} {'MAR':>6s} "
+    header = (f"  {'Label':<34s} {'CAGR':>7s} {'MaxDD':>7s} {'MAR':>6s} {'Sharpe':>7s} "
               f"{'Trades':>6s} {'WinRate':>7s} {'Expect':>7s} {'PF':>6s} "
               f"{'AvgHold':>7s}")
     lines.append(header)
-    lines.append("  " + "-" * 96)
+    lines.append("  " + "-" * 114)
 
-    for name, m in all_results:
+    for label, m in all_results:
         cagr     = m.get("cagr", 0) * 100
         max_dd   = m.get("max_drawdown", 0) * 100
         mar      = m.get("mar_ratio", 0)
+        sharpe   = m.get("sharpe", float("nan"))
         trades   = m.get("total_trades", 0)
         win_rate = m.get("win_rate", 0) * 100
         expect   = m.get("expectancy_r", 0)
         pf       = m.get("profit_factor", 0)
         avg_hold = m.get("avg_hold_days", 0)
 
-        row = (f"  {name:<28s} {cagr:>6.2f}% {max_dd:>6.2f}% {mar:>6.2f} "
+        sharpe_s = f"{sharpe:>6.2f}" if sharpe == sharpe else "   nan"
+        row = (f"  {label:<34s} {cagr:>6.2f}% {max_dd:>6.2f}% {mar:>6.2f} {sharpe_s} "
                f"{trades:>6d} {win_rate:>6.1f}% {expect:>6.2f}R {pf:>6.2f} "
                f"{avg_hold:>6.1f}d")
         lines.append(row)
 
-    lines.append("=" * 100)
+    lines.append("=" * 118)
     return "\n".join(lines)
+
+
+def print_mode_b_stats(engine: PortfolioEngine, label: str) -> None:
+    """Print Mode B cancellation and delay statistics."""
+    stats = engine.get_mode_b_stats()
+    total_cancelled = stats["cancelled_sleep_window"] + stats["cancelled_too_late"]
+
+    print(f"\n{'=' * 60}")
+    print(f"  MODE B STATS  — {label}")
+    print(f"{'=' * 60}")
+    print(f"  Cancelled (sleep window / 24h timeout) : {stats['cancelled_sleep_window']}")
+    print(f"  Cancelled (too late / ATR-distance gate): {stats['cancelled_too_late']}")
+    print(f"  Total cancelled                         : {total_cancelled}")
+
+    dd = stats["delay_distribution"]
+    if dd:
+        total_entered = sum(dd.values())
+        print(f"\n  Entry delay vs Mode A (H4 bars, {total_entered} trades entered):")
+        for bars in sorted(dd):
+            count = dd[bars]
+            pct   = count / total_entered * 100
+            note  = "  ← same speed as Mode A" if bars == 0 else ""
+            print(f"    {bars:2d} bar(s) delayed : {count:4d}  ({pct:5.1f}%){note}")
+    else:
+        print("\n  No trades entered in Mode B.")
+
+    samples = stats["cancelled_samples"]
+    if samples:
+        print(f"\n  Sample cancelled trades ({len(samples)}):")
+        for s in samples:
+            ref    = f"{s['ref_entry_price']:.5f}" if s["ref_entry_price"] is not None else "N/A"
+            actual = f"{s['actual_entry_price']:.5f}"
+            dist   = f"{s['distance']:.5f}" if s["distance"] is not None else "N/A"
+            print(f"    [{s['reason']:12s}] {s['instrument']:<8s} "
+                  f"sig={s['signal_ts']}  ref={ref}  actual={actual}  "
+                  f"atr={s['atr_signal']:.5f}  dist={dist}")
+    print("=" * 60)
 
 
 def main():
@@ -125,65 +162,67 @@ def main():
 
     initial_equity = 100_000.0
 
-    # Full universe
-    instruments = None  # None = all 16 instruments
-
-    # Periods
-    periods = [
-        ("2025-01-01", "2025-07-31"),
-        ("2025-08-01", "2025-12-31"),
-        ("2025-01-01", "2025-12-31"),
+    # ── Configuration ─────────────────────────────────────────────────────────
+    instruments = [
+        "Silver", "Gold", "Copper",
+        "JP225", "US500", "US100",
+        "EURJPY", "USDJPY",
+        "Sugar", "Coffee", "Cocoa",
+        "AUDJPY", "NZDJPY",
     ]
+
+    # Run period (Aug–Dec 2025 per user request; change as needed)
+    periods = [
+        ("2008-01-01", "2016-12-31"),
+        ("2017-01-01", "2022-12-31"),
+        ("2023-01-01", "2025-12-31"),
+    ]
+
+    # Modes to run (always A + B for comparison)
+    modes = ["A"]
+    # ─────────────────────────────────────────────────────────────────────────
 
     n_inst = str(len(instruments)) if instruments else "all 16"
     print("=" * 60)
     print("  TREND FOLLOWING BACKTEST ENGINE")
-    print(f"  Strategies: {len(STRATEGIES)} registered")
-    print(f"  Universe: {n_inst} instruments")
-    print(f"  Periods: {len(periods)} ({', '.join(f'{s[:4]}-{e[:4]}' for s,e in periods)})")
-    print(f"  Risk: 0.7% per trade")
+    print(f"  Strategies : {len(STRATEGIES)} registered")
+    print(f"  Universe   : {n_inst} instruments")
+    print(f"  Periods    : {', '.join(f'{s} -> {e}' for s, e in periods)}")
+    print(f"  Modes      : {', '.join(modes)}")
+    print(f"  Risk       : 0.7% per trade")
     print("=" * 60)
 
-    all_results = []
+    all_results   = []   # (label, metrics) for comparison table
+    mode_b_engines = []  # (label, engine) for Mode B stats
 
     for strategy in STRATEGIES:
         cfg = strategy.config()
         for start, end in periods:
-            label = f"{cfg.name} [{start[:4]}-{end[:4]}]"
-            metrics, equity_curve, trades_df = run_strategy(
-                strategy, start, end, initial_equity, instruments=instruments
-            )
-            all_results.append((label, metrics))
+            for mode in modes:
+                label = f"{cfg.name} [M{mode}] {start[:7]}→{end[:7]}"
+                metrics, equity_curve, trades_df, engine = run_strategy(
+                    strategy, start, end, initial_equity,
+                    instruments=instruments, mode=mode,
+                )
+                all_results.append((label, metrics))
+                if mode == "B":
+                    mode_b_engines.append((label, engine))
 
-    # ── Comparison ─────────────────────────────────────────────────────────
-    if len(all_results) > 1:
-        comparison = format_comparison(all_results)
-        print(comparison)
-    elif len(all_results) == 1:
-        comparison = format_comparison(all_results)
-        print(comparison)
+    # ── Comparison table ──────────────────────────────────────────────────────
+    comparison = format_comparison(all_results)
+    print(comparison)
 
-    # Save comparison
     os.makedirs("output", exist_ok=True)
-    comparison_text = format_comparison(all_results)
     with open("output/comparison.txt", "w") as f:
-        f.write(comparison_text)
+        f.write(comparison)
+
+    # ── Mode B statistics ─────────────────────────────────────────────────────
+    for label, engine in mode_b_engines:
+        print_mode_b_stats(engine, label)
 
     elapsed = time.time() - t0
     print(f"\nAll backtests complete in {elapsed:.1f}s")
     print("Output files saved to ./output/")
-
-    if len(all_results) == 1:
-        name, metrics = all_results[0]
-        slug = _slug(name)
-        print(f"  {slug}/equity_curve.csv")
-        print(f"  {slug}/trades.csv")
-        print(f"  {slug}/metrics_summary.txt")
-    else:
-        for name, _ in all_results:
-            slug = _slug(name)
-            print(f"  {slug}/")
-    print("  comparison.txt")
 
     return all_results
 

@@ -8,6 +8,14 @@ D1 strategies:
 
 H4 strategies:
   Each H4 bar: execute pending -> trailing stops -> check D1 trend + H4 signal -> MTM (daily)
+
+Modes (H4 strategies only):
+  Mode A — Ideal Robot:
+      Take every valid signal. Enter at next H4 bar open. No constraints.
+
+  Mode B — Human Executable:
+      Sleep window: only enter during 09:00–23:00 local time.
+      Too-late filter: cancel if actual entry price deviates > 1×ATR(signal) from ref entry.
 """
 
 from __future__ import annotations
@@ -24,6 +32,36 @@ from strategies.base import Strategy
 
 INSTRUMENTS = _INSTRUMENTS
 
+# ── Sleep-window / too-late utilities (importable for unit tests) ─────────────
+
+def is_in_sleep_window(ts: pd.Timestamp) -> bool:
+    """Return True if timestamp falls within trader active hours [09:00, 23:00)."""
+    return 9 <= ts.hour < 23
+
+
+def check_too_late(actual_price: float, ref_price: float, atr_signal: float,
+                   multiplier: float = 1.0) -> bool:
+    """Return True if the trade should be cancelled (price drifted too far).
+
+    Uses atr_signal (ATR at signal time, not entry time) per spec.
+    """
+    return abs(actual_price - ref_price) > multiplier * atr_signal
+
+
+# ── Mode B pending signal container ──────────────────────────────────────────
+
+@dataclass
+class _HumanPending:
+    """Wraps a SignalResult with additional Mode B execution metadata."""
+    sig:            SignalResult
+    atr_signal:     float                    # ATR frozen at signal bar
+    signal_ts:      pd.Timestamp             # H4 bar when signal fired
+    ref_price:      Optional[float] = None   # Open of first bar after signal (Mode A ref)
+    ref_ts:         Optional[pd.Timestamp] = None
+    bars_since_sig: int = 0                  # H4 bars processed after signal bar
+
+
+# ── Daily equity snapshot ─────────────────────────────────────────────────────
 
 @dataclass
 class DailySnapshot:
@@ -44,22 +82,25 @@ class PortfolioEngine:
                  start: str = "2008-01-01",
                  end:   str = "2024-12-31",
                  initial_equity: float = 100_000.0,
-                 instruments: list | None = None):
-
+                 instruments: list | None = None,
+                 mode: str = "A"):
+        """
+        mode: "A" = Ideal Robot (default), "B" = Human Executable.
+        Mode B applies sleep-window and too-late ATR filter (H4 strategies only).
+        """
         self.strategy       = strategy
         self.start          = pd.Timestamp(start)
         self.end            = pd.Timestamp(end)
         self.initial_equity = initial_equity
+        self.mode           = mode.upper()
 
         cfg = strategy.config()
         universe = instruments if instruments is not None else INSTRUMENTS
 
         print("Loading market data...")
-        # Load extra warmup data for indicator computation
         warmup_start = self.start - pd.DateOffset(months=6)
         self.raw_data = load_all_data(str(warmup_start.date()), end)
 
-        # Only use instruments that were successfully loaded AND in universe
         self.active_instruments = [n for n in universe if n in self.raw_data]
 
         print("Pre-computing indicators...")
@@ -81,14 +122,20 @@ class PortfolioEngine:
         self.pending_signals:   Dict[str, SignalResult] = {}
         self.pending_exits:     set[str]             = set()
 
-    # ── Main entry point ─────────────────────────────────────────────────
+        # Mode B statistics
+        self.cancelled_sleep:    int = 0   # cancelled: no eligible bar within 24h
+        self.cancelled_too_late: int = 0   # cancelled: price drifted > 1×ATR
+        self.delay_distribution: Dict[int, int] = {}  # {n_bars_delayed: count}
+        self.cancelled_samples:  List[dict] = []       # up to 5 cancelled trade samples
+
+    # ── Main entry point ─────────────────────────────────────────────────────
     def run(self) -> pd.DataFrame:
         """Execute the full backtest. Returns equity curve as DataFrame."""
         if self.strategy.uses_h4:
             return self._run_h4()
         return self._run_d1()
 
-    # ── D1 simulation loop ───────────────────────────────────────────────
+    # ── D1 simulation loop ───────────────────────────────────────────────────
     def _run_d1(self) -> pd.DataFrame:
         cfg = self.strategy.config()
         print(f"\nRunning backtest {self.start.date()} -> {self.end.date()}...")
@@ -98,7 +145,6 @@ class PortfolioEngine:
         for date in trading_days:
             date = pd.Timestamp(date)
 
-            # Build today's D1 bar lookup
             d1_bars: Dict[str, pd.Series] = {}
             for name in self.active_instruments:
                 d1_df = self.indicators[name]["D1"]
@@ -181,17 +227,22 @@ class PortfolioEngine:
                 signals_seen=signals_seen, signals_rejected=rejected_today,
             ))
 
-        # Close remaining open trades
         self._close_remaining(trading_days[-1])
         print(f"Backtest complete. {len(self.all_trades)} total trades processed.")
         return self._equity_curve_df()
 
-    # ── H4 simulation loop ───────────────────────────────────────────────
+    # ── H4 simulation loop ───────────────────────────────────────────────────
     def _run_h4(self) -> pd.DataFrame:
-        cfg = self.strategy.config()
-        print(f"\nRunning H4 backtest {self.start.date()} -> {self.end.date()}...")
+        cfg    = self.strategy.config()
+        mode_b = (self.mode == "B")
 
-        # Build sorted timeline of all H4 timestamps within trading period
+        print(f"\nRunning H4 backtest [Mode {self.mode}] "
+              f"{self.start.date()} -> {self.end.date()}...")
+
+        # Mode B uses its own pending dict so Mode A state is untouched
+        pending_b: Dict[str, _HumanPending] = {}
+
+        # Build sorted timeline of all H4 timestamps in trading period
         all_h4_times = set()
         for name in self.active_instruments:
             h4_df = self.indicators[name].get("H4")
@@ -204,21 +255,18 @@ class PortfolioEngine:
             print("No H4 bars in trading period.")
             return self._equity_curve_df()
 
-        # Precompute D1 date index per instrument for fast trend lookup
+        # Pre-index D1 dates per instrument for fast trend lookup
         d1_indices = {}
         for name in self.active_instruments:
             d1_indices[name] = self.indicators[name]["D1"].index
 
         prev_snap_date = None
-        day_new_trades = 0
-        day_closed     = 0
-        day_signals    = 0
-        day_rejected   = 0
+        day_new_trades = day_closed = day_signals = day_rejected = 0
 
-        for i, h4_ts in enumerate(h4_timeline):
+        for h4_ts in h4_timeline:
             current_date = h4_ts.normalize()
 
-            # New day — snapshot previous day
+            # Day boundary → snapshot previous day
             if prev_snap_date is not None and current_date != prev_snap_date:
                 self._snapshot_day(prev_snap_date, day_new_trades, day_closed,
                                    day_signals, day_rejected)
@@ -236,44 +284,120 @@ class PortfolioEngine:
             if not h4_bars:
                 continue
 
-            # Step 1: Execute pending signals at H4 open
-            for name in list(self.pending_signals):
-                sig = self.pending_signals.pop(name)
-                bar = h4_bars.get(name)
-                if bar is None:
-                    day_rejected += 1
-                    continue
-                sig.entry_price = float(bar["open"])
-                sig.date = h4_ts
-                trade = self.risk_engine.open_trade(sig)
-                if trade is not None:
-                    day_new_trades += 1
-                else:
-                    day_rejected += 1
+            # ── Step 1: Execute pending signals ──────────────────────────────
 
-            # Step 2: Update trailing stops with H4 bars
+            if not mode_b:
+                # Mode A: enter at next H4 bar open, no constraints
+                for name in list(self.pending_signals):
+                    sig = self.pending_signals.pop(name)
+                    bar = h4_bars.get(name)
+                    if bar is None:
+                        day_rejected += 1
+                        continue
+                    sig.entry_price = float(bar["open"])
+                    sig.date = h4_ts
+                    trade = self.risk_engine.open_trade(sig)
+                    if trade is not None:
+                        day_new_trades += 1
+                    else:
+                        day_rejected += 1
+
+            else:
+                # Mode B: sleep window + too-late ATR filter
+                for name in list(pending_b):
+                    hp  = pending_b[name]
+                    bar = h4_bars.get(name)
+                    if bar is None:
+                        # No data for this instrument at this bar — keep waiting
+                        continue
+
+                    hp.bars_since_sig += 1
+                    bar_open = float(bar["open"])
+
+                    # First bar after signal: record Mode A reference entry price
+                    if hp.ref_price is None:
+                        hp.ref_price = bar_open
+                        hp.ref_ts    = h4_ts
+
+                    in_window = is_in_sleep_window(h4_ts)
+
+                    if in_window:
+                        # First eligible bar found — apply too-late filter once
+                        distance = abs(bar_open - hp.ref_price)
+                        if check_too_late(bar_open, hp.ref_price, hp.atr_signal):
+                            # Cancel: price drifted too far from ref entry
+                            self.cancelled_too_late += 1
+                            if len(self.cancelled_samples) < 5:
+                                self.cancelled_samples.append({
+                                    "reason":             "too_late",
+                                    "instrument":         hp.sig.instrument,
+                                    "signal_ts":          hp.signal_ts,
+                                    "ref_entry_price":    hp.ref_price,
+                                    "actual_entry_price": bar_open,
+                                    "atr_signal":         hp.atr_signal,
+                                    "distance":           distance,
+                                })
+                            del pending_b[name]
+                        else:
+                            # Enter trade at this bar's open
+                            hp.sig.entry_price = bar_open
+                            hp.sig.date        = h4_ts
+                            trade = self.risk_engine.open_trade(hp.sig)
+                            # Delay = 0 means same-speed as Mode A (entered on ref bar)
+                            delay = hp.bars_since_sig - 1
+                            self.delay_distribution[delay] = (
+                                self.delay_distribution.get(delay, 0) + 1
+                            )
+                            if trade is not None:
+                                day_new_trades += 1
+                            else:
+                                day_rejected += 1
+                            del pending_b[name]
+
+                    else:
+                        # Outside sleep window — check 24h timeout
+                        if (h4_ts - hp.signal_ts) > pd.Timedelta(hours=24):
+                            self.cancelled_sleep += 1
+                            if len(self.cancelled_samples) < 5:
+                                self.cancelled_samples.append({
+                                    "reason":             "sleep_window",
+                                    "instrument":         hp.sig.instrument,
+                                    "signal_ts":          hp.signal_ts,
+                                    "ref_entry_price":    hp.ref_price,
+                                    "actual_entry_price": bar_open,
+                                    "atr_signal":         hp.atr_signal,
+                                    "distance":           (
+                                        abs(bar_open - hp.ref_price)
+                                        if hp.ref_price is not None else None
+                                    ),
+                                })
+                            del pending_b[name]
+
+            # ── Step 2: Update trailing stops ────────────────────────────────
             closed = self.risk_engine.update_trailing_stops_d1(h4_ts, h4_bars)
             self.all_trades.extend(closed)
             day_closed += len(closed)
 
-            # Step 3: Check H4 signals with D1 trend filter
+            # ── Step 3: Check H4 signals with D1 trend filter ────────────────
             for name in self.active_instruments:
                 h4_bar = h4_bars.get(name)
                 if h4_bar is None:
                     continue
 
-                # Skip if already have open trade or pending signal
+                # Skip if open trade or already pending
                 if self.risk_engine.state.instrument_has_open_trade(name):
                     continue
-                if name in self.pending_signals:
+                if not mode_b and name in self.pending_signals:
+                    continue
+                if mode_b and name in pending_b:
                     continue
 
-                # Get D1 trend from most recent completed D1 bar
-                d1_df = self.indicators[name]["D1"]
+                # D1 trend from most recent completed D1 bar
+                d1_df     = self.indicators[name]["D1"]
                 d1_before = d1_indices[name][d1_indices[name] < current_date]
                 if len(d1_before) == 0:
                     continue
-                d1_row = d1_df.loc[d1_before[-1]]
+                d1_row    = d1_df.loc[d1_before[-1]]
 
                 d1_trend = self.strategy.get_d1_trend(d1_row)
                 if d1_trend is None:
@@ -285,21 +409,31 @@ class PortfolioEngine:
 
                 day_signals += 1
                 atr_val = float(h4_bar["atr"])
-                self.pending_signals[name] = SignalResult(
-                    instrument=name,
-                    date=h4_ts,
-                    direction=direction,
-                    atr=atr_val,
-                    entry_price=float(h4_bar["close"]),
-                    d1_close=float(d1_row["close"]),
+
+                sig = SignalResult(
+                    instrument  = name,
+                    date        = h4_ts,
+                    direction   = direction,
+                    atr         = atr_val,
+                    entry_price = float(h4_bar["close"]),
+                    d1_close    = float(d1_row["close"]),
                 )
+
+                if not mode_b:
+                    self.pending_signals[name] = sig
+                else:
+                    pending_b[name] = _HumanPending(
+                        sig        = sig,
+                        atr_signal = atr_val,   # frozen at signal time
+                        signal_ts  = h4_ts,
+                    )
 
         # Final day snapshot
         if prev_snap_date is not None:
             self._snapshot_day(prev_snap_date, day_new_trades, day_closed,
                                day_signals, day_rejected)
 
-        # Close remaining
+        # Close remaining open trades at last available price
         last_ts = h4_timeline[-1]
         h4_bars_last: Dict[str, pd.Series] = {}
         for name in self.active_instruments:
@@ -318,7 +452,6 @@ class PortfolioEngine:
 
     def _snapshot_day(self, date, new_trades, closed, signals, rejected):
         """Create a daily equity snapshot using last known bar prices."""
-        # Use D1 bars for MTM if available, otherwise H4
         mtm_bars: Dict[str, pd.Series] = {}
         for name in self.active_instruments:
             d1_df = self.indicators[name]["D1"]
@@ -342,10 +475,19 @@ class PortfolioEngine:
             signals_seen=signals, signals_rejected=rejected,
         ))
 
-    # ── Helpers ──────────────────────────────────────────────────────────
+    # ── Mode B statistics ─────────────────────────────────────────────────────
+    def get_mode_b_stats(self) -> dict:
+        """Return Mode B cancellation and delay statistics."""
+        return {
+            "cancelled_sleep_window": self.cancelled_sleep,
+            "cancelled_too_late":     self.cancelled_too_late,
+            "delay_distribution":     dict(sorted(self.delay_distribution.items())),
+            "cancelled_samples":      self.cancelled_samples,
+        }
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _close_remaining(self, last_date):
-        """Close any remaining open trades at last available price."""
         d1_bars: Dict[str, pd.Series] = {}
         for name in self.active_instruments:
             d1_df = self.indicators[name]["D1"]
