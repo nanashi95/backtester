@@ -42,8 +42,8 @@ RISK_PER_TRADE     = 0.007   # 0.7% of equity = 1R
 
 # Bucket caps (in R units)
 CAP_FX_YEN         = 1.0
-CAP_OTHER_BUCKET   = 2.0
-CAP_TOTAL_PORTFOLIO = 6.0
+CAP_OTHER_BUCKET   = 1.0
+CAP_TOTAL_PORTFOLIO = 4.0
 
 FX_YEN_INSTRUMENTS = {"AUDJPY", "EURJPY", "USDJPY", "CADJPY", "NZDJPY"}
 

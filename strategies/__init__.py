@@ -5,7 +5,8 @@ from strategies.donchian_breakout import DonchianBreakout
 from strategies.donchian_reversal import DonchianReversal
 from strategies.donchian_reversal_100 import DonchianReversal100
 from strategies.sma_multi_tf import SmaMultiTF
+from strategies.donchian_trend import DonchianTrend
 
 STRATEGIES = [
-    SmaMultiTF(),
+    DonchianReversal(),
 ]

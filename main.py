@@ -163,22 +163,22 @@ def main():
     initial_equity = 100_000.0
 
     # ── Configuration ─────────────────────────────────────────────────────────
+    # ── Configuration ─────────────────────────────────────────────────────────
+    # Full universe minus energy (roll gaps, zero long-term contribution)
     instruments = [
-        "Silver", "Gold", "Copper",
-        "JP225", "US500", "US100",
-        "EURJPY", "USDJPY",
+        "US100", "US500", "JP225",
+        "AUDJPY", "EURJPY", "USDJPY", "CADJPY", "NZDJPY",
+        "Gold", "Silver", "Copper",
         "Sugar", "Coffee", "Cocoa",
-        "AUDJPY", "NZDJPY",
     ]
 
-    # Run period (Aug–Dec 2025 per user request; change as needed)
     periods = [
         ("2008-01-01", "2016-12-31"),
         ("2017-01-01", "2022-12-31"),
         ("2023-01-01", "2025-12-31"),
+        ("2008-01-01", "2025-12-31"),  # full period
     ]
 
-    # Modes to run (always A + B for comparison)
     modes = ["A"]
     # ─────────────────────────────────────────────────────────────────────────
 
