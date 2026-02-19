@@ -163,14 +163,14 @@ def main():
     initial_equity = 100_000.0
 
     # ── Configuration ─────────────────────────────────────────────────────────
-    # Expanded universe: global indices, yen crosses, metals, softs, crypto
+    # Starter 8-instrument config: 3 equity + 3 yen crosses + 2 metals
     instruments = [
-        # Equity (6)
-        "US100", "JP225", "DE30", "GB100", "AU200", "FR40",
-        # FX yen (6) — all yen crosses
-        "USDJPY", "CHFJPY", "AUDJPY", "EURJPY", "CADJPY", "NZDJPY",
-        # Metals (4)
-        "Gold", "Silver", "Copper", "PALLAD",
+        # Equity (3)
+        "US100", "JP225", "DE30",
+        # FX yen (3)
+        "USDJPY", "EURJPY", "AUDJPY",
+        # Metals (2)
+        "Gold", "Silver",
     ]
 
     periods = [
