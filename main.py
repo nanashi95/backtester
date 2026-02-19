@@ -163,13 +163,12 @@ def main():
     initial_equity = 100_000.0
 
     # ── Configuration ─────────────────────────────────────────────────────────
-    # ── Configuration ─────────────────────────────────────────────────────────
-    # Full universe minus energy (roll gaps, zero long-term contribution)
+    # New universe: FX majors + USDJPY, 2 indices, metals, 2 softs
     instruments = [
-        "US100", "US500", "JP225",
-        "AUDJPY", "EURJPY", "USDJPY", "CADJPY", "NZDJPY",
+        "US100", "JP225",
+        "EURUSD", "USDJPY", "GBPUSD", "USDCHF", "AUDUSD", "USDCAD",
         "Gold", "Silver", "Copper",
-        "Sugar", "Coffee", "Cocoa",
+        "Cocoa", "Coffee",
     ]
 
     periods = [
@@ -189,7 +188,8 @@ def main():
     print(f"  Universe   : {n_inst} instruments")
     print(f"  Periods    : {', '.join(f'{s} -> {e}' for s, e in periods)}")
     print(f"  Modes      : {', '.join(modes)}")
-    print(f"  Risk       : 0.7% per trade")
+    from engine.risk_engine import RISK_PER_TRADE
+    print(f"  Risk       : {RISK_PER_TRADE*100:.1f}% per trade")
     print("=" * 60)
 
     all_results   = []   # (label, metrics) for comparison table

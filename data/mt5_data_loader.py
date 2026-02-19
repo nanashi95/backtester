@@ -29,6 +29,7 @@ MT5_DATA_DIR = os.path.join(os.path.dirname(__file__), "mt5")
 INSTRUMENTS = [
     "US100", "US500", "JP225",
     "AUDJPY", "EURJPY", "USDJPY", "CADJPY", "NZDJPY",
+    "EURUSD", "GBPUSD", "AUDUSD", "USDCAD", "USDCHF",
     "UKOil", "USOil", "Gold", "Silver", "Copper",
     "Sugar", "Coffee", "Cocoa",
 ]
@@ -42,6 +43,11 @@ BUCKET_MAP = {
     "USDJPY": "fx_yen",
     "CADJPY": "fx_yen",
     "NZDJPY": "fx_yen",
+    "EURUSD": "fx_major",
+    "GBPUSD": "fx_major",
+    "AUDUSD": "fx_major",
+    "USDCAD": "fx_major",
+    "USDCHF": "fx_major",
     "Gold":   "metals",
     "Silver": "metals",
     "Copper": "metals",
@@ -97,20 +103,18 @@ def load_all_data(start: str = "2008-01-01",
             print(f"  MISSING  {name:10s} D1 — {d1_path}")
             failed.append(name)
             continue
-        if not os.path.exists(h4_path):
-            print(f"  MISSING  {name:10s} H4 — {h4_path}")
-            failed.append(name)
-            continue
 
         d1 = _load_mt5_csv(d1_path)
-        h4 = _load_mt5_csv(h4_path)
-
-        # Filter to requested date range
         d1 = d1.loc[start:end]
-        h4 = h4.loc[start:end]
+
+        h4 = None
+        if os.path.exists(h4_path):
+            h4 = _load_mt5_csv(h4_path)
+            h4 = h4.loc[start:end]
 
         all_data[name] = {"D1": d1, "H4": h4}
-        print(f"  Loaded {name:10s} | D1 bars: {len(d1):5d} | H4 bars: {len(h4):6d}")
+        h4_label = f"{len(h4):6d}" if h4 is not None else "  n/a"
+        print(f"  Loaded {name:10s} | D1 bars: {len(d1):5d} | H4 bars: {h4_label}")
 
     if failed:
         print(f"\n  WARNING: Missing data for {len(failed)} instruments: {failed}")

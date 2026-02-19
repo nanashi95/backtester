@@ -38,7 +38,7 @@ from strategies.base import StrategyConfig
 
 
 # ── Risk constants ───────────────────────────────────────────────────────────
-RISK_PER_TRADE     = 0.007   # 0.7% of equity = 1R
+RISK_PER_TRADE     = 0.005   # 0.5% of equity = 1R
 
 # Bucket caps (in R units)
 CAP_FX_YEN         = 1.0
@@ -56,6 +56,11 @@ BUCKET_MAP = {
     "USDJPY": "fx_yen",
     "CADJPY": "fx_yen",
     "NZDJPY": "fx_yen",
+    "EURUSD": "fx_major",
+    "GBPUSD": "fx_major",
+    "AUDUSD": "fx_major",
+    "USDCAD": "fx_major",
+    "USDCHF": "fx_major",
     "Gold":   "metals",
     "Silver": "metals",
     "Copper": "metals",
