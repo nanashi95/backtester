@@ -27,35 +27,64 @@ from typing import Dict
 MT5_DATA_DIR = os.path.join(os.path.dirname(__file__), "mt5")
 
 INSTRUMENTS = [
-    "US100", "US500", "JP225",
-    "AUDJPY", "EURJPY", "USDJPY", "CADJPY", "NZDJPY",
+    # Equity indices
+    "US100", "US500", "JP225", "DE30", "GB100", "AU200", "FR40", "EUR50", "US30",
+    # FX yen crosses
+    "AUDJPY", "EURJPY", "USDJPY", "CADJPY", "NZDJPY", "CHFJPY",
+    # FX majors
     "EURUSD", "GBPUSD", "AUDUSD", "USDCAD", "USDCHF",
-    "UKOil", "USOil", "Gold", "Silver", "Copper",
-    "Sugar", "Coffee", "Cocoa",
+    # Energy
+    "UKOil", "USOil",
+    # Metals
+    "Gold", "Silver", "Copper", "PALLAD", "PLATIN",
+    # Softs / Agriculture
+    "Sugar", "Coffee", "Cocoa", "WHEAT", "SOYBEAN",
+    # Crypto
+    "BTCUSD", "ETHUSD",
 ]
 
 BUCKET_MAP = {
+    # Equity
     "US100":  "equity",
     "US500":  "equity",
     "JP225":  "equity",
+    "DE30":   "equity",
+    "GB100":  "equity",
+    "AU200":  "equity",
+    "FR40":   "equity",
+    "EUR50":  "equity",
+    "US30":   "equity",
+    # FX yen
     "AUDJPY": "fx_yen",
     "EURJPY": "fx_yen",
     "USDJPY": "fx_yen",
     "CADJPY": "fx_yen",
     "NZDJPY": "fx_yen",
+    "CHFJPY": "fx_yen",
+    # FX majors
     "EURUSD": "fx_major",
     "GBPUSD": "fx_major",
     "AUDUSD": "fx_major",
     "USDCAD": "fx_major",
     "USDCHF": "fx_major",
+    # Energy
+    "UKOil":  "energy",
+    "USOil":  "energy",
+    # Metals
     "Gold":   "metals",
     "Silver": "metals",
     "Copper": "metals",
-    "UKOil":  "energy",
-    "USOil":  "energy",
+    "PALLAD": "metals",
+    "PLATIN": "metals",
+    # Softs / Agriculture
     "Sugar":  "softs",
     "Coffee": "softs",
     "Cocoa":  "softs",
+    "WHEAT":  "softs",
+    "SOYBEAN": "softs",
+    # Crypto
+    "BTCUSD": "crypto",
+    "ETHUSD": "crypto",
 }
 
 

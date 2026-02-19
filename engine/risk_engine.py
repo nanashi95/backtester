@@ -48,27 +48,47 @@ CAP_TOTAL_PORTFOLIO = 4.0
 FX_YEN_INSTRUMENTS = {"AUDJPY", "EURJPY", "USDJPY", "CADJPY", "NZDJPY"}
 
 BUCKET_MAP = {
+    # Equity
     "US100":  "equity",
     "US500":  "equity",
     "JP225":  "equity",
+    "DE30":   "equity",
+    "GB100":  "equity",
+    "AU200":  "equity",
+    "FR40":   "equity",
+    "EUR50":  "equity",
+    "US30":   "equity",
+    # FX yen
     "AUDJPY": "fx_yen",
     "EURJPY": "fx_yen",
     "USDJPY": "fx_yen",
     "CADJPY": "fx_yen",
     "NZDJPY": "fx_yen",
+    "CHFJPY": "fx_yen",
+    # FX majors
     "EURUSD": "fx_major",
     "GBPUSD": "fx_major",
     "AUDUSD": "fx_major",
     "USDCAD": "fx_major",
     "USDCHF": "fx_major",
+    # Energy
+    "UKOil":  "energy",
+    "USOil":  "energy",
+    # Metals
     "Gold":   "metals",
     "Silver": "metals",
     "Copper": "metals",
-    "UKOil":  "energy",
-    "USOil":  "energy",
+    "PALLAD": "metals",
+    "PLATIN": "metals",
+    # Softs / Agriculture
     "Sugar":  "softs",
     "Coffee": "softs",
     "Cocoa":  "softs",
+    "WHEAT":  "softs",
+    "SOYBEAN": "softs",
+    # Crypto
+    "BTCUSD": "crypto",
+    "ETHUSD": "crypto",
 }
 
 

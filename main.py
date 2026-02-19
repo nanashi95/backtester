@@ -163,12 +163,14 @@ def main():
     initial_equity = 100_000.0
 
     # ── Configuration ─────────────────────────────────────────────────────────
-    # New universe: FX majors + USDJPY, 2 indices, metals, 2 softs
+    # Expanded universe: global indices, yen crosses, metals, softs, crypto
     instruments = [
-        "US100", "JP225",
-        "EURUSD", "USDJPY", "GBPUSD", "USDCHF", "AUDUSD", "USDCAD",
-        "Gold", "Silver", "Copper",
-        "Cocoa", "Coffee",
+        # Equity (6)
+        "US100", "JP225", "DE30", "GB100", "AU200", "FR40",
+        # FX yen (6) — all yen crosses
+        "USDJPY", "CHFJPY", "AUDJPY", "EURJPY", "CADJPY", "NZDJPY",
+        # Metals (4)
+        "Gold", "Silver", "Copper", "PALLAD",
     ]
 
     periods = [
