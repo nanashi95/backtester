@@ -24,7 +24,8 @@ import pandas as pd
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
-from data.mt5_data_loader import load_all_data, INSTRUMENTS as _INSTRUMENTS, BUCKET_MAP
+from data.loader import load_all_data
+from data.mt5_data_loader import INSTRUMENTS as _INSTRUMENTS, BUCKET_MAP
 from engine.signal_engine import SignalEngine, SignalResult, precompute_indicators
 from engine.risk_engine import RiskEngine, Trade
 from strategies.base import Strategy
@@ -83,16 +84,21 @@ class PortfolioEngine:
                  end:   str = "2024-12-31",
                  initial_equity: float = 100_000.0,
                  instruments: list | None = None,
-                 mode: str = "A"):
+                 mode: str = "A",
+                 cap_per_bucket: float = 1.0,
+                 cap_total: float | None = None):
         """
         mode: "A" = Ideal Robot (default), "B" = Human Executable.
         Mode B applies sleep-window and too-late ATR filter (H4 strategies only).
+        cap_per_bucket: max R open per bucket (default 1.0 = one trade per bucket).
+        cap_total: max total R open across all buckets (default = n_active_buckets × cap_per_bucket).
         """
         self.strategy       = strategy
         self.start          = pd.Timestamp(start)
         self.end            = pd.Timestamp(end)
         self.initial_equity = initial_equity
         self.mode           = mode.upper()
+        self._cap_per_bucket = cap_per_bucket
 
         cfg = strategy.config()
         universe = instruments if instruments is not None else INSTRUMENTS
@@ -113,9 +119,16 @@ class PortfolioEngine:
                 h4=h4,
             )
 
+        # Count distinct active buckets to set default total cap
+        from engine.risk_engine import BUCKET_MAP as _BM
+        active_buckets = {_BM[n] for n in self.active_instruments if n in _BM}
+        _cap_total = cap_total if cap_total is not None else len(active_buckets) * cap_per_bucket
+
         self.signal_engine = SignalEngine(strategy, self.indicators,
                                           self.active_instruments)
-        self.risk_engine   = RiskEngine(initial_equity, config=cfg)
+        self.risk_engine   = RiskEngine(initial_equity, config=cfg,
+                                        cap_per_bucket=cap_per_bucket,
+                                        cap_total=_cap_total)
 
         self.equity_curve:      List[DailySnapshot] = []
         self.all_trades:        List[Trade]          = []

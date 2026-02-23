@@ -19,12 +19,8 @@ Stop Management:
   - Exit triggered by trailing stop OR reversal (if config.use_reversal_exit)
 
 Portfolio Caps (checked BEFORE any new trade is opened):
-  - FX Yen bucket   ≤ 1R open exposure
-  - Equity bucket    ≤ 2R open exposure
-  - Metals bucket    ≤ 2R open exposure
-  - Energy bucket    ≤ 2R open exposure
-  - Softs bucket     ≤ 2R open exposure
-  - Total portfolio  ≤ 6R open exposure
+  - Each bucket      ≤ 1R open exposure
+  - Total portfolio  ≤ 5R open exposure  (6R if crypto bucket active)
   - If any cap breached → trade REJECTED (no scaling)
 """
 
@@ -40,55 +36,87 @@ from strategies.base import StrategyConfig
 # ── Risk constants ───────────────────────────────────────────────────────────
 RISK_PER_TRADE     = 0.005   # 0.5% of equity = 1R
 
-# Bucket caps (in R units)
-CAP_FX_YEN         = 1.0
-CAP_OTHER_BUCKET   = 1.0
-CAP_TOTAL_PORTFOLIO = 4.0
-
-FX_YEN_INSTRUMENTS = {"AUDJPY", "EURJPY", "USDJPY", "CADJPY", "NZDJPY"}
+# Bucket caps (in R units) — uniform 1R per bucket
+CAP_PER_BUCKET      = 1.0
+CAP_TOTAL_PORTFOLIO = 5.0    # raise to 6R if crypto bucket is active
 
 BUCKET_MAP = {
     # Equity
-    "US100":  "equity",
-    "US500":  "equity",
-    "JP225":  "equity",
-    "DE30":   "equity",
-    "GB100":  "equity",
-    "AU200":  "equity",
-    "FR40":   "equity",
-    "EUR50":  "equity",
-    "US30":   "equity",
-    # FX yen
-    "AUDJPY": "fx_yen",
-    "EURJPY": "fx_yen",
-    "USDJPY": "fx_yen",
-    "CADJPY": "fx_yen",
-    "NZDJPY": "fx_yen",
-    "CHFJPY": "fx_yen",
-    # FX majors
-    "EURUSD": "fx_major",
-    "GBPUSD": "fx_major",
-    "AUDUSD": "fx_major",
-    "USDCAD": "fx_major",
-    "USDCHF": "fx_major",
+    "US100":   "equity",
+    "US500":   "equity",
+    "US2000":  "equity",
+    "JP225":   "equity",
+    "DE30":    "equity",
+    "GB100":   "equity",
+    "AU200":   "equity",
+    "FR40":    "equity",
+    "EUR50":   "equity",
+    "US30":    "equity",
+    # FX (yen crosses + majors merged into one bucket)
+    "AUDJPY":  "fx",
+    "EURJPY":  "fx",
+    "USDJPY":  "fx",
+    "CADJPY":  "fx",
+    "NZDJPY":  "fx",
+    "CHFJPY":  "fx",
+    "EURUSD":  "fx",
+    "GBPUSD":  "fx",
+    "AUDUSD":  "fx",
+    "USDCAD":  "fx",
+    "USDCHF":  "fx",
+    "USDNOK":  "fx",
     # Energy
-    "UKOil":  "energy",
-    "USOil":  "energy",
+    "UKOil":   "energy",
+    "USOil":   "energy",
+    "NATGAS":  "energy",
     # Metals
-    "Gold":   "metals",
-    "Silver": "metals",
-    "Copper": "metals",
-    "PALLAD": "metals",
-    "PLATIN": "metals",
-    # Softs / Agriculture
-    "Sugar":  "softs",
-    "Coffee": "softs",
-    "Cocoa":  "softs",
-    "WHEAT":  "softs",
+    "Gold":    "metals",
+    "Silver":  "metals",
+    "Copper":  "metals",
+    "PALLAD":  "metals",
+    "PLATIN":  "metals",
+    # Softs / Agriculture (MT5 names)
+    "Sugar":   "softs",
+    "Coffee":  "softs",
+    "Cocoa":   "softs",
+    "WHEAT":   "softs",
     "SOYBEAN": "softs",
     # Crypto
-    "BTCUSD": "crypto",
-    "ETHUSD": "crypto",
+    "BTCUSD":  "crypto",
+    "ETHUSD":  "crypto",
+    # ── IBKR futures ─────────────────────────────────────────────────────────
+    # Rates
+    "ZN":  "rates",   # 10Y Treasury Note
+    "ZB":  "rates",   # 30Y Treasury Bond
+    "ZF":  "rates",   # 5Y Treasury Note
+    "ZT":  "rates",   # 2Y Treasury Note
+    # Equity indices
+    "ES":  "equity",  # S&P 500 E-mini
+    "NQ":  "equity",  # Nasdaq E-mini
+    "RTY": "equity",  # Russell 2000
+    "YM":  "equity",  # Dow E-mini
+    # FX futures
+    "6J":  "fx",      # JPY/USD
+    "6E":  "fx",      # EUR/USD
+    "6A":  "fx",      # AUD/USD
+    "6C":  "fx",      # CAD/USD
+    "6B":  "fx",      # GBP/USD
+    # Metals futures
+    "GC":  "metals",  # Gold
+    "SI":  "metals",  # Silver
+    "HG":  "metals",  # Copper
+    "PA":  "metals",  # Palladium
+    "PL":  "metals",  # Platinum
+    # Energy futures
+    "CL":  "energy",  # Crude Oil
+    "NG":  "energy",  # Natural Gas
+    # Agriculture futures (CME/CBOT/NYBOT)
+    "ZW":  "agriculture",  # Wheat
+    "ZS":  "agriculture",  # Soybean
+    "ZC":  "agriculture",  # Corn
+    "SB":  "agriculture",  # Sugar
+    "KC":  "agriculture",  # Coffee
+    "CC":  "agriculture",  # Cocoa
 }
 
 
@@ -107,12 +135,22 @@ class Trade:
     r_risked:      float      # R allocated to this trade (always 1.0)
     entry_equity:  float      # equity at entry
 
+    risk_multiplier: float = 1.0    # vol-scaling factor (1.2/1.0/0.6); 1.0 = unscaled
+
+    # Pyramiding (one add per trade)
+    pyramid_added:        bool = False
+    pyramid_units:        float = 0.0
+    pyramid_entry_price:  Optional[float] = None
+    pyramid_entry_equity: Optional[float] = None
+    pyramid_dollar_risk:  float = 0.0   # actual $ risked on pyramid unit (stored for r_multiple calc)
+
     # Filled on exit
     exit_date:     Optional[pd.Timestamp] = None
     exit_price:    Optional[float] = None
     pnl:           Optional[float] = None
     r_multiple:    Optional[float] = None
     exit_reason:   str = ""
+    sleeve:        str = ""         # ensemble sleeve label ("A"/"B"/"C"); "" for single-strategy
 
     @property
     def is_open(self) -> bool:
@@ -143,17 +181,23 @@ class PortfolioState:
 
 class RiskEngine:
     def __init__(self, initial_equity: float = 100_000.0,
-                 config: Optional[StrategyConfig] = None):
+                 config: Optional[StrategyConfig] = None,
+                 cap_per_bucket: float = CAP_PER_BUCKET,
+                 cap_total: float = CAP_TOTAL_PORTFOLIO,
+                 risk_per_trade: float = RISK_PER_TRADE):
         self.state = PortfolioState(equity=initial_equity)
         self.config = config
         self._atr_initial_stop  = config.atr_initial_stop  if config else 2.0
         self._atr_trailing_stop = config.atr_trailing_stop if config else 2.0
+        self._cap_per_bucket  = cap_per_bucket
+        self._cap_total       = cap_total
+        self._risk_per_trade  = risk_per_trade
         self._trade_counter = 0
 
     # ── Position sizing ──────────────────────────────────────────────────────
     def compute_units(self, equity: float, atr: float) -> float:
         """Risk exactly 1R on the trade via initial stop of N×ATR(D1)."""
-        dollar_risk    = equity * RISK_PER_TRADE
+        dollar_risk    = equity * self._risk_per_trade
         stop_distance  = self._atr_initial_stop * atr
         if stop_distance <= 0:
             return 0.0
@@ -171,12 +215,11 @@ class RiskEngine:
 
         # Bucket cap check
         current_bucket_r = state.bucket_r_exposure(bucket)
-        cap = CAP_FX_YEN if bucket == "fx_yen" else CAP_OTHER_BUCKET
-        if current_bucket_r + 1.0 > cap + 1e-9:
+        if current_bucket_r + 1.0 > self._cap_per_bucket + 1e-9:
             return False, f"bucket_cap_{bucket}"
 
         # Total portfolio cap
-        if state.open_r_exposure() + 1.0 > CAP_TOTAL_PORTFOLIO + 1e-9:
+        if state.open_r_exposure() + 1.0 > self._cap_total + 1e-9:
             return False, "portfolio_cap"
 
         return True, ""
@@ -294,7 +337,7 @@ class RiskEngine:
                      exit_price: float,
                      reason: str = "trailing_stop") -> None:
         pnl          = trade.pnl_from_price(exit_price)
-        initial_risk = trade.entry_equity * RISK_PER_TRADE
+        initial_risk = trade.entry_equity * self._risk_per_trade
         r_multiple   = pnl / initial_risk if initial_risk > 0 else 0.0
 
         trade.exit_date   = date
