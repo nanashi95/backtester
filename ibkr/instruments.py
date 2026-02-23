@@ -4,51 +4,61 @@ ibkr/instruments.py
 Target universe for the IBKR futures-based backtest.
 
 Each entry maps an internal name to a tuple:
-    (ibkr_symbol, exchange, currency, secType, bucket)
+    (ibkr_symbol, exchange, currency, secType, bucket, invert)
 
-secType = 'CONTFUT'  — continuous front-month contract, best for backtesting
-                       (avoids roll gaps; IB splices adjacent contracts).
+secType = 'CONTFUT'  — continuous front-month futures (commodities, rates, equity)
+secType = 'CASH'     — FX spot via IDEALPRO (same Donchian signals as FX futures)
 
-Bucket names align with ensemble_engine / risk_engine conventions.
+invert = True  — store 1/price in CSV, swapping H/L (needed when IBKR quotes the
+                 pair in the opposite direction to the futures contract)
+                 6J: futures = JPY/USD direction → download USD/JPY → invert
+                 6C: futures = CAD/USD direction → download USD/CAD → invert
+
+whatToShow:
+  CONTFUT instruments use 'TRADES' (last sale price, standard for futures)
+  CASH instruments use 'MIDPOINT' (bid/ask mid, standard for FX spot)
 """
 
 INSTRUMENTS = {
-    # ── Rates (primary addition vs MT5) ──────────────────────────────────────
-    "ZN":  ("ZN",  "CBOT",  "USD", "CONTFUT", "rates"),   # 10Y Treasury Note
-    "ZB":  ("ZB",  "CBOT",  "USD", "CONTFUT", "rates"),   # 30Y Treasury Bond
-    "ZF":  ("ZF",  "CBOT",  "USD", "CONTFUT", "rates"),   # 5Y Treasury Note
+    # ── Rates ─────────────────────────────────────────────────────────────────
+    #                  symbol  exchange  currency  secType   bucket   invert
+    "ZN":  ("ZN",  "CBOT",     "USD", "CONTFUT", "rates",   False),
+    "ZB":  ("ZB",  "CBOT",     "USD", "CONTFUT", "rates",   False),
+    "ZF":  ("ZF",  "CBOT",     "USD", "CONTFUT", "rates",   False),
 
     # ── Equity indices ────────────────────────────────────────────────────────
-    "ES":  ("ES",  "CME",   "USD", "CONTFUT", "equity"),  # S&P 500 E-mini
-    "NQ":  ("NQ",  "CME",   "USD", "CONTFUT", "equity"),  # Nasdaq E-mini
-    "RTY": ("RTY", "CME",   "USD", "CONTFUT", "equity"),  # Russell 2000
-    "YM":  ("YM",  "CBOT",  "USD", "CONTFUT", "equity"),  # Dow E-mini
+    "ES":  ("ES",  "CME",      "USD", "CONTFUT", "equity",  False),
+    "NQ":  ("NQ",  "CME",      "USD", "CONTFUT", "equity",  False),
+    "RTY": ("RTY", "CME",      "USD", "CONTFUT", "equity",  False),
+    "YM":  ("YM",  "CBOT",     "USD", "CONTFUT", "equity",  False),
 
-    # ── FX futures ────────────────────────────────────────────────────────────
-    "6J":  ("6J",  "CME",   "USD", "CONTFUT", "fx"),      # JPY/USD
-    "6E":  ("6E",  "CME",   "USD", "CONTFUT", "fx"),      # EUR/USD
-    "6A":  ("6A",  "CME",   "USD", "CONTFUT", "fx"),      # AUD/USD
-    "6C":  ("6C",  "CME",   "USD", "CONTFUT", "fx"),      # CAD/USD
-    "6B":  ("6B",  "CME",   "USD", "CONTFUT", "fx"),      # GBP/USD
+    # ── FX (spot via IDEALPRO — Donchian signals identical to FX futures) ─────
+    # 6E, 6A, 6B: IBKR quotes in the same direction as the futures contract
+    "6E":  ("EUR", "IDEALPRO", "USD", "CASH",    "fx",      False),  # EUR/USD
+    "6A":  ("AUD", "IDEALPRO", "USD", "CASH",    "fx",      False),  # AUD/USD
+    "6B":  ("GBP", "IDEALPRO", "USD", "CASH",    "fx",      False),  # GBP/USD
+    # 6J, 6C: IBKR quotes USD as base → invert to match futures direction
+    "6J":  ("USD", "IDEALPRO", "JPY", "CASH",    "fx",      True),   # 1/(USD/JPY) → JPY/USD
+    "6C":  ("USD", "IDEALPRO", "CAD", "CASH",    "fx",      True),   # 1/(USD/CAD) → CAD/USD
 
     # ── Metals ───────────────────────────────────────────────────────────────
-    "GC":  ("GC",  "COMEX", "USD", "CONTFUT", "metals"),  # Gold
-    "SI":  ("SI",  "COMEX", "USD", "CONTFUT", "metals"),  # Silver
-    "HG":  ("HG",  "COMEX", "USD", "CONTFUT", "metals"),  # Copper
-    "PA":  ("PA",  "NYMEX", "USD", "CONTFUT", "metals"),  # Palladium
-    "PL":  ("PL",  "NYMEX", "USD", "CONTFUT", "metals"),  # Platinum
+    "GC":  ("GC",  "COMEX",    "USD", "CONTFUT", "metals",  False),
+    "SI":  ("SI",  "COMEX",    "USD", "CONTFUT", "metals",  False),
+    "HG":  ("HG",  "COMEX",    "USD", "CONTFUT", "metals",  False),
+    "PA":  ("PA",  "NYMEX",    "USD", "CONTFUT", "metals",  False),
+    "PL":  ("PL",  "NYMEX",    "USD", "CONTFUT", "metals",  False),
 
-    # ── Energy (included for testing — likely excluded after results) ─────────
-    "CL":  ("CL",  "NYMEX", "USD", "CONTFUT", "energy"),  # Crude Oil
-    "NG":  ("NG",  "NYMEX", "USD", "CONTFUT", "energy"),  # Natural Gas
+    # ── Energy ────────────────────────────────────────────────────────────────
+    "CL":  ("CL",  "NYMEX",    "USD", "CONTFUT", "energy",  False),
+    "NG":  ("NG",  "NYMEX",    "USD", "CONTFUT", "energy",  False),
 
     # ── Agriculture ───────────────────────────────────────────────────────────
-    "ZW":  ("ZW",  "CBOT",  "USD", "CONTFUT", "agriculture"),  # Wheat
-    "ZS":  ("ZS",  "CBOT",  "USD", "CONTFUT", "agriculture"),  # Soybean
-    "ZC":  ("ZC",  "CBOT",  "USD", "CONTFUT", "agriculture"),  # Corn
-    "SB":  ("SB",  "NYBOT", "USD", "CONTFUT", "agriculture"),  # Sugar
-    "KC":  ("KC",  "NYBOT", "USD", "CONTFUT", "agriculture"),  # Coffee
-    "CC":  ("CC",  "NYBOT", "USD", "CONTFUT", "agriculture"),  # Cocoa
+    "ZW":  ("ZW",  "CBOT",     "USD", "CONTFUT", "agriculture", False),
+    "ZS":  ("ZS",  "CBOT",     "USD", "CONTFUT", "agriculture", False),
+    "ZC":  ("ZC",  "CBOT",     "USD", "CONTFUT", "agriculture", False),
+    "SB":  ("SB",  "NYBOT",    "USD", "CONTFUT", "agriculture", False),
+    "KC":  ("KC",  "NYBOT",    "USD", "CONTFUT", "agriculture", False),
+    "CC":  ("CC",  "NYBOT",    "USD", "CONTFUT", "agriculture", False),
 }
 
 # Flat bucket lookup — used by ibkr_data_loader.get_instrument_bucket()

@@ -1,12 +1,17 @@
 """
 ibkr/downloader.py
 ------------------
-Download historical D1 CONTFUT bars from IB Gateway and save to
+Download historical D1 bars from IB Gateway and save to
 data/ibkr/{SYMBOL}_D1.csv.
+
+Contract types:
+  CONTFUT — continuous front-month futures (rates, equity, metals, energy, agri)
+  CASH    — FX spot via IDEALPRO (6E, 6A, 6B, 6J, 6C); same Donchian signals
+             as FX futures.  6J and 6C are stored inverted (1/price, H↔L swap)
+             to match the direction of the corresponding futures contracts.
 
 Pacing:
   IBKR allows 60 historical-data requests per 10 minutes.
-  For D1 bars with "30 Y" duration: 1 request per instrument → safe.
   We sleep 12s between requests to stay well within limits.
 
 Prerequisites:
@@ -18,13 +23,9 @@ Usage:
   python3 ibkr/downloader.py ZN ZB GC         # download specific symbols
   python3 ibkr/downloader.py --skip-existing   # skip already-present CSVs
 
-Output CSV format (standard comma-separated):
+Output CSV format:
   date,open,high,low,close
   2008-01-02,112.89,113.15,112.45,112.73
-
-Note on yield-based contracts (ZN, ZB, ZF):
-  These are PRICE-based futures, not yield.  Long = buy duration.
-  The signal logic (Donchian breakout) applies without modification.
 """
 
 from __future__ import annotations
@@ -42,18 +43,16 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 DATA_DIR = _PROJECT_ROOT / "data" / "ibkr"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-PORT_PAPER = 4002
-PORT_LIVE  = 4001
-CLIENT_ID  = 1
-DURATION   = "30 Y"       # 30 years of history
-BAR_SIZE   = "1 day"
-WHAT       = "TRADES"
-USE_RTH    = True          # regular trading hours only
-SLEEP_BETWEEN = 12         # seconds between requests (pacing)
+PORT_PAPER    = 4002
+PORT_LIVE     = 4001
+CLIENT_ID     = 12       # default; use --client-id to override if taken
+DURATION      = "30 Y"
+BAR_SIZE      = "1 day"
+USE_RTH       = True
+SLEEP_BETWEEN = 12       # seconds between requests
 
 
 def _make_contract(symbol: str, exchange: str, currency: str, sec_type: str):
-    """Build an ib_insync Contract object for a continuous futures contract."""
     from ib_insync import Contract
     return Contract(
         symbol   = symbol,
@@ -67,32 +66,31 @@ def download_symbol(ib, name: str, spec: tuple, output_path: Path) -> bool:
     """
     Download D1 bars for one instrument and save to CSV.
 
-    Args:
-        ib:          connected IB instance
-        name:        internal instrument name (e.g. "ZN")
-        spec:        (symbol, exchange, currency, secType, bucket)
-        output_path: destination CSV path
-
-    Returns True on success, False on failure.
+    spec = (ibkr_symbol, exchange, currency, secType, bucket, invert)
+      invert=True: store 1/price with H↔L swap (used for 6J, 6C)
     """
     import pandas as pd
 
-    symbol, exchange, currency, sec_type, _ = spec
+    symbol, exchange, currency, sec_type, _, invert = spec
 
-    print(f"  [{name}]  {symbol} @ {exchange}  ({sec_type}) ...", end=" ", flush=True)
+    # FX CASH uses MIDPOINT; futures use TRADES
+    what_to_show = "MIDPOINT" if sec_type == "CASH" else "TRADES"
+
+    label = f"{symbol}/{currency}" if sec_type == "CASH" else f"{symbol} @ {exchange}"
+    print(f"  [{name}]  {label}  ({sec_type}) ...", end=" ", flush=True)
 
     contract = _make_contract(symbol, exchange, currency, sec_type)
 
     try:
         bars = ib.reqHistoricalData(
             contract,
-            endDateTime     = "",
-            durationStr     = DURATION,
-            barSizeSetting  = BAR_SIZE,
-            whatToShow      = WHAT,
-            useRTH          = USE_RTH,
-            formatDate      = 1,
-            keepUpToDate    = False,
+            endDateTime    = "",
+            durationStr    = DURATION,
+            barSizeSetting = BAR_SIZE,
+            whatToShow     = what_to_show,
+            useRTH         = USE_RTH,
+            formatDate     = 1,
+            keepUpToDate   = False,
         )
     except Exception as exc:
         print(f"ERROR: {exc}")
@@ -102,46 +100,52 @@ def download_symbol(ib, name: str, spec: tuple, output_path: Path) -> bool:
         print("EMPTY — no data returned")
         return False
 
-    df = ib.util.df(bars)
+    # Build DataFrame from BarData objects
+    records = [
+        {
+            "date":   b.date,
+            "open":   b.open,
+            "high":   b.high,
+            "low":    b.low,
+            "close":  b.close,
+            "volume": getattr(b, "volume", -1),
+        }
+        for b in bars
+    ]
+    df = pd.DataFrame(records)
 
-    # Keep only the OHLC columns we need
-    df = df[["date", "open", "high", "low", "close"]].copy()
+    # Drop non-trading rows (volume=0 stubs; skip check for CASH which has no volume)
+    if sec_type != "CASH" and df["volume"].gt(0).any():
+        df = df[df["volume"] > 0].copy()
 
-    # Parse dates — IB returns strings like "2008-01-02" for daily bars
     df["date"] = pd.to_datetime(df["date"])
-
-    # Drop non-trading rows (volume=0 stub rows sometimes appear)
-    if "volume" in ib.util.df(bars).columns:
-        raw = ib.util.df(bars)
-        mask = raw["volume"] > 0
-        df = df[mask.values].copy()
-
     df = df.set_index("date")
     df.index.name = "date"
+    df = df[["open", "high", "low", "close"]]
     df.sort_index(inplace=True)
-
-    # Remove duplicate dates (keep last)
     df = df[~df.index.duplicated(keep="last")]
 
+    # Inversion: 1/price with H↔L swap (for 6J, 6C to match futures direction)
+    if invert:
+        df = pd.DataFrame({
+            "open":  1.0 / df["open"],
+            "high":  1.0 / df["low"],    # low becomes high after inversion
+            "low":   1.0 / df["high"],   # high becomes low after inversion
+            "close": 1.0 / df["close"],
+        }, index=df.index)
+
     df.to_csv(output_path, index=True)
-    print(f"OK  ({len(df)} bars,  {df.index[0].date()} → {df.index[-1].date()})")
+    inv_note = "  [inverted]" if invert else ""
+    print(f"OK  ({len(df)} bars,  {df.index[0].date()} → {df.index[-1].date()}){inv_note}")
     return True
 
 
 def run(symbols: list[str] | None = None, skip_existing: bool = False,
-        port: int = PORT_PAPER) -> None:
-    """
-    Main download loop.
-
-    Args:
-        symbols:       list of instrument names to download (None = all)
-        skip_existing: if True, skip instruments with an existing CSV
-        port:          IB Gateway port (4002=paper, 4001=live)
-    """
+        port: int = PORT_PAPER, client_id: int = CLIENT_ID) -> None:
     try:
         import ib_insync
     except ImportError:
-        print("ERROR: ib_insync is not installed.  Run:  pip install ib_insync")
+        print("ERROR: ib_insync not installed.  Run:  pip install ib_insync")
         sys.exit(1)
 
     from ib_insync import IB
@@ -154,13 +158,14 @@ def run(symbols: list[str] | None = None, skip_existing: bool = False,
         print(f"No matching instruments found for: {symbols}")
         sys.exit(1)
 
-    print(f"\nConnecting to IB Gateway on port {port} ...")
+    print(f"\nConnecting to IB Gateway on port {port}  (clientId={client_id}) ...")
     ib = IB()
     try:
-        ib.connect("127.0.0.1", port, clientId=CLIENT_ID)
+        ib.connect("127.0.0.1", port, clientId=client_id)
     except Exception as exc:
         print(f"Connection failed: {exc}")
         print("Make sure IB Gateway is running and API access is enabled.")
+        print("If 'clientId already in use', try --client-id <other_number>.")
         sys.exit(1)
 
     print(f"Connected.  Downloading {len(targets)} instrument(s) to {DATA_DIR}/\n")
@@ -181,7 +186,6 @@ def run(symbols: list[str] | None = None, skip_existing: bool = False,
         else:
             n_fail += 1
 
-        # Pacing — stay under 60 requests / 10 min
         if name != list(targets)[-1]:
             time.sleep(SLEEP_BETWEEN)
 
@@ -194,11 +198,11 @@ def run(symbols: list[str] | None = None, skip_existing: bool = False,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Download IBKR historical D1 CONTFUT data to data/ibkr/."
+        description="Download IBKR historical D1 data to data/ibkr/."
     )
     parser.add_argument(
         "symbols", nargs="*",
-        help="Instrument names to download (e.g. ZN ZB GC).  Default: all."
+        help="Instrument names to download (e.g. ZN ZB GC 6E).  Default: all."
     )
     parser.add_argument(
         "--skip-existing", action="store_true",
@@ -206,14 +210,19 @@ def main():
     )
     parser.add_argument(
         "--port", type=int, default=PORT_PAPER,
-        help=f"IB Gateway port (default {PORT_PAPER} for paper, {PORT_LIVE} for live)."
+        help=f"IB Gateway port (default {PORT_PAPER} paper, {PORT_LIVE} live)."
+    )
+    parser.add_argument(
+        "--client-id", type=int, default=CLIENT_ID,
+        help=f"API client ID (default {CLIENT_ID})."
     )
     args = parser.parse_args()
 
     run(
-        symbols        = args.symbols or None,
-        skip_existing  = args.skip_existing,
-        port           = args.port,
+        symbols       = args.symbols or None,
+        skip_existing = args.skip_existing,
+        port          = args.port,
+        client_id     = args.client_id,
     )
 
 

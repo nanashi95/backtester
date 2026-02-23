@@ -36,10 +36,12 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-# ── Wire up IBKR data source BEFORE importing any engine ─────────────────────
+# ── Wire up data source BEFORE importing any engine ──────────────────────────
+# Historical data: Yahoo Finance futures (2000–today, actual CME/CBOT prices)
+# Live execution:  IB Gateway (same underlying contracts — prices match)
 import data.loader as loader
-import data.ibkr_data_loader as ibkr_loader
-loader.configure(ibkr_loader.load_all_data, ibkr_loader.get_instrument_bucket)
+import data.yf_data_loader as yf_loader
+loader.configure(yf_loader.load_all_data, yf_loader.get_instrument_bucket)
 
 from strategies.donchian_ensemble import DonchianSleeveB, DonchianSleeveC
 from engine.ensemble_engine import EnsemblePortfolioEngine
