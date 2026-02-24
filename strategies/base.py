@@ -53,6 +53,12 @@ class Strategy(ABC):
         Default: no strategy-level exit (only trailing stop / reversal)."""
         return False
 
+    def is_trend_intact(self, date: pd.Timestamp, d1_row: pd.Series,
+                        direction: int) -> bool:
+        """Return True if the trend is still valid for an open position.
+        Used for pyramid qualification check. Default: always True."""
+        return True
+
     # ── H4 multi-timeframe support ───────────────────────────────────────
 
     @property

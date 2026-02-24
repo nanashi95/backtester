@@ -28,13 +28,12 @@ MT5_DATA_DIR = os.path.join(os.path.dirname(__file__), "mt5")
 
 INSTRUMENTS = [
     # Equity indices
-    "US100", "US500", "JP225", "DE30", "GB100", "AU200", "FR40", "EUR50", "US30",
-    # FX yen crosses
+    "US100", "US500", "US2000", "JP225", "DE30", "GB100", "AU200", "FR40", "EUR50", "US30",
+    # FX (yen crosses + majors)
     "AUDJPY", "EURJPY", "USDJPY", "CADJPY", "NZDJPY", "CHFJPY",
-    # FX majors
-    "EURUSD", "GBPUSD", "AUDUSD", "USDCAD", "USDCHF",
+    "EURUSD", "GBPUSD", "AUDUSD", "USDCAD", "USDCHF", "USDNOK",
     # Energy
-    "UKOil", "USOil",
+    "UKOil", "USOil", "NATGAS",
     # Metals
     "Gold", "Silver", "Copper", "PALLAD", "PLATIN",
     # Softs / Agriculture
@@ -45,46 +44,48 @@ INSTRUMENTS = [
 
 BUCKET_MAP = {
     # Equity
-    "US100":  "equity",
-    "US500":  "equity",
-    "JP225":  "equity",
-    "DE30":   "equity",
-    "GB100":  "equity",
-    "AU200":  "equity",
-    "FR40":   "equity",
-    "EUR50":  "equity",
-    "US30":   "equity",
-    # FX yen
-    "AUDJPY": "fx_yen",
-    "EURJPY": "fx_yen",
-    "USDJPY": "fx_yen",
-    "CADJPY": "fx_yen",
-    "NZDJPY": "fx_yen",
-    "CHFJPY": "fx_yen",
-    # FX majors
-    "EURUSD": "fx_major",
-    "GBPUSD": "fx_major",
-    "AUDUSD": "fx_major",
-    "USDCAD": "fx_major",
-    "USDCHF": "fx_major",
+    "US100":   "equity",
+    "US500":   "equity",
+    "US2000":  "equity",
+    "JP225":   "equity",
+    "DE30":    "equity",
+    "GB100":   "equity",
+    "AU200":   "equity",
+    "FR40":    "equity",
+    "EUR50":   "equity",
+    "US30":    "equity",
+    # FX (yen crosses + majors merged)
+    "AUDJPY":  "fx",
+    "EURJPY":  "fx",
+    "USDJPY":  "fx",
+    "CADJPY":  "fx",
+    "NZDJPY":  "fx",
+    "CHFJPY":  "fx",
+    "EURUSD":  "fx",
+    "GBPUSD":  "fx",
+    "AUDUSD":  "fx",
+    "USDCAD":  "fx",
+    "USDCHF":  "fx",
+    "USDNOK":  "fx",
     # Energy
-    "UKOil":  "energy",
-    "USOil":  "energy",
+    "UKOil":   "energy",
+    "USOil":   "energy",
+    "NATGAS":  "energy",
     # Metals
-    "Gold":   "metals",
-    "Silver": "metals",
-    "Copper": "metals",
-    "PALLAD": "metals",
-    "PLATIN": "metals",
+    "Gold":    "metals",
+    "Silver":  "metals",
+    "Copper":  "metals",
+    "PALLAD":  "metals",
+    "PLATIN":  "metals",
     # Softs / Agriculture
-    "Sugar":  "softs",
-    "Coffee": "softs",
-    "Cocoa":  "softs",
-    "WHEAT":  "softs",
+    "Sugar":   "softs",
+    "Coffee":  "softs",
+    "Cocoa":   "softs",
+    "WHEAT":   "softs",
     "SOYBEAN": "softs",
     # Crypto
-    "BTCUSD": "crypto",
-    "ETHUSD": "crypto",
+    "BTCUSD":  "crypto",
+    "ETHUSD":  "crypto",
 }
 
 

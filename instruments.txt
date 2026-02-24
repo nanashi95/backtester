@@ -1,0 +1,47 @@
+# Equity indices
+US100
+US500
+JP225
+DE30
+GB100
+AU200
+FR40
+EUR50
+US30
+
+# FX yen crosses
+AUDJPY
+EURJPY
+USDJPY
+CADJPY
+NZDJPY
+CHFJPY
+
+# FX majors
+EURUSD
+GBPUSD
+AUDUSD
+USDCAD
+USDCHF
+
+# Energy
+UKOil
+USOil
+
+# Metals
+Gold
+Silver
+Copper
+PALLAD
+PLATIN
+
+# Softs / Agriculture
+Sugar
+Coffee
+Cocoa
+WHEAT
+SOYBEAN
+
+# Crypto
+BTCUSD
+ETHUSD

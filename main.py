@@ -35,17 +35,19 @@ def _slug(name: str) -> str:
     return re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
 
 
-def run_strategy(strategy, start, end, initial_equity, instruments=None, mode="A"):
+def run_strategy(strategy, start, end, initial_equity, instruments=None, mode="A",
+                 cap_per_bucket=1.0, cap_total=None, silent=False):
     """Run a single strategy in the given mode. Returns (metrics, equity_curve, trades_df, engine)."""
     cfg = strategy.config()
-    print(f"\n{'=' * 60}")
-    print(f"  STRATEGY : {cfg.name}")
-    print(f"  Mode     : {mode} ({'Ideal Robot' if mode == 'A' else 'Human Executable'})")
-    print(f"  Period   : {start} -> {end}")
-    print(f"  ATR({cfg.atr_period}) | Stop: {cfg.atr_initial_stop}x/{cfg.atr_trailing_stop}x")
-    if instruments:
-        print(f"  Universe : {len(instruments)} instruments")
-    print(f"{'=' * 60}")
+    if not silent:
+        print(f"\n{'=' * 60}")
+        print(f"  STRATEGY : {cfg.name}")
+        print(f"  Mode     : {mode} ({'Ideal Robot' if mode == 'A' else 'Human Executable'})")
+        print(f"  Period   : {start} -> {end}")
+        print(f"  ATR({cfg.atr_period}) | Stop: {cfg.atr_initial_stop}x/{cfg.atr_trailing_stop}x")
+        if instruments:
+            print(f"  Universe : {len(instruments)} instruments")
+        print(f"{'=' * 60}")
 
     engine = PortfolioEngine(
         strategy=strategy,
@@ -54,18 +56,25 @@ def run_strategy(strategy, start, end, initial_equity, instruments=None, mode="A
         initial_equity=initial_equity,
         instruments=instruments,
         mode=mode,
+        cap_per_bucket=cap_per_bucket,
+        cap_total=cap_total,
     )
 
     equity_curve = engine.run()
     trades_df    = engine.get_trades_df()
 
-    print("\nComputing performance metrics...")
+    if not silent:
+        print("\nComputing performance metrics...")
     metrics = compute_all_metrics(equity_curve, trades_df, initial_equity=initial_equity)
 
     report = format_report(metrics)
-    print(report)
+    if not silent:
+        print(report)
 
-    # Save outputs
+    # Save outputs (skipped in silent mode to avoid polluting output dirs)
+    if silent:
+        return metrics, equity_curve, trades_df, engine
+
     period_tag = f"{start[:4]}{start[5:7]}_{end[:4]}{end[5:7]}"
     slug = f"{_slug(cfg.name)}_mode{mode}_{period_tag}"
     out_dir = os.path.join("output", slug)
@@ -163,14 +172,18 @@ def main():
     initial_equity = 100_000.0
 
     # ── Configuration ─────────────────────────────────────────────────────────
-    # Starter 8-instrument config: 3 equity + 3 yen crosses + 2 metals
+    # 5-bucket diversified config: equity + FX + energy + metals + agriculture
     instruments = [
-        # Equity (3)
-        "US100", "JP225", "DE30",
-        # FX yen (3)
-        "USDJPY", "EURJPY", "AUDJPY",
-        # Metals (2)
-        "Gold", "Silver",
+        # Equity (6)
+        "US100", "US500", "US2000", "DE30", "JP225", "GB100",
+        # FX (6)
+        "EURUSD", "GBPUSD", "USDCHF", "AUDUSD", "USDCAD", "USDNOK",
+        # Energy (3)
+        "USOil", "UKOil", "NATGAS",
+        # Metals (3)
+        "Gold", "Silver", "Copper",
+        # Agriculture (3)
+        "WHEAT", "SOYBEAN", "Sugar",
     ]
 
     periods = [
@@ -183,7 +196,7 @@ def main():
     modes = ["A"]
     # ─────────────────────────────────────────────────────────────────────────
 
-    n_inst = str(len(instruments)) if instruments else "all 16"
+    n_inst = str(len(instruments)) if instruments else "all"
     print("=" * 60)
     print("  TREND FOLLOWING BACKTEST ENGINE")
     print(f"  Strategies : {len(STRATEGIES)} registered")

@@ -48,16 +48,21 @@ class EnsembleRiskManager:
                  sleeve_configs:  Dict[str, StrategyConfig],
                  risk_per_trade:  float = RISK_PER_TRADE_DEFAULT,
                  global_cap:      float = GLOBAL_CAP_DEFAULT,
-                 sleeves:         Optional[List[str]] = None):
+                 sleeves:         Optional[List[str]] = None,
+                 sector_cap_pct:  float = 0.0,
+                 use_vol_scaling: bool  = False):
         self.equity         = initial_equity
         self.initial_equity = initial_equity
         self.risk_per_trade = risk_per_trade
         self.global_cap     = global_cap
         self.sleeve_configs = sleeve_configs
         self.sleeves        = sleeves if sleeves is not None else SLEEVES
+        self.sector_cap_pct  = sector_cap_pct
+        self.use_vol_scaling = use_vol_scaling
 
         self.open_trades:   Dict[str, List[Trade]] = {s: [] for s in self.sleeves}
         self.closed_trades: List[Trade] = []
+        self.sector_cap_rejections: Dict[str, int] = {}
         self._counter = 0
 
     # ── Aggregate helpers ─────────────────────────────────────────────────────
@@ -71,6 +76,9 @@ class EnsembleRiskManager:
     def sleeve_has_open(self, sleeve: str, instrument: str) -> bool:
         return any(t.instrument == instrument for t in self.open_trades[sleeve])
 
+    def sector_r(self, bucket: str) -> float:
+        return sum(t.r_risked for t in self.all_open() if t.bucket == bucket)
+
     # ── Trade lifecycle ───────────────────────────────────────────────────────
 
     def can_open(self, sleeve: str, instrument: str) -> Tuple[bool, str]:
@@ -78,11 +86,21 @@ class EnsembleRiskManager:
             return False, "sleeve_dup"
         if self.open_r() + 1.0 > self.global_cap + 1e-9:
             return False, "global_cap"
+        if self.sector_cap_pct > 0.0:
+            bucket = get_instrument_bucket(instrument)
+            cap    = self.global_cap * self.sector_cap_pct
+            if self.sector_r(bucket) + 1.0 > cap + 1e-9:
+                return False, f"sector_cap_{bucket}"
         return True, ""
 
     def open_trade(self, sleeve: str, sig: SignalResult) -> Optional[Trade]:
-        ok, _ = self.can_open(sleeve, sig.instrument)
+        ok, reason = self.can_open(sleeve, sig.instrument)
         if not ok:
+            if reason.startswith("sector_cap_"):
+                bucket = reason[len("sector_cap_"):]
+                self.sector_cap_rejections[bucket] = (
+                    self.sector_cap_rejections.get(bucket, 0) + 1
+                )
             return None
 
         cfg       = self.sleeve_configs[sleeve]
@@ -90,13 +108,19 @@ class EnsembleRiskManager:
         if stop_dist <= 0:
             return None
 
-        # Vol-based risk scaling: multiplier driven by ATR percentile rank
-        pct = sig.atr_percentile
-        if pct == pct:  # not NaN
-            if pct > 0.60:
-                multiplier = 1.2
-            elif pct < 0.40:
-                multiplier = 0.6
+        # Vol-based risk scaling (only when use_vol_scaling=True)
+        # Low-vol  (pct < 0.33): expand size  → 1.2×
+        # Mid-vol  (0.33–0.66):  base size    → 1.0×
+        # High-vol (pct > 0.66): compress     → 0.6×
+        if self.use_vol_scaling:
+            pct = sig.atr_percentile
+            if pct == pct:  # not NaN
+                if pct < 0.33:
+                    multiplier = 1.2
+                elif pct > 0.66:
+                    multiplier = 0.6
+                else:
+                    multiplier = 1.0
             else:
                 multiplier = 1.0
         else:
@@ -246,9 +270,12 @@ class EnsemblePortfolioEngine:
                  risk_per_trade:     float = RISK_PER_TRADE_DEFAULT,
                  global_cap:         float = GLOBAL_CAP_DEFAULT,
                  sleeve_instruments:    Optional[Dict[str, List[str]]] = None,
-                 use_pyramiding:        bool = False,
-                 pyramid_min_days:      int  = 20,
-                 pyramid_risk_fraction: float = 1.0):
+                 use_pyramiding:        bool  = False,
+                 pyramid_min_days:      int   = 20,
+                 pyramid_risk_fraction: float = 1.0,
+                 sector_cap_pct:        float = 0.0,
+                 use_vol_scaling:       bool  = False,
+                 dd_pause_pct:          float = 0.0):
         """
         sleeve_instruments: per-sleeve instrument filter.
           e.g. {"FX": ["EURUSD","GBPUSD"], "B": ["Gold","US100"]}
@@ -299,11 +326,14 @@ class EnsemblePortfolioEngine:
 
         self.risk    = EnsembleRiskManager(initial_equity, sleeve_configs,
                                            risk_per_trade, global_cap,
-                                           sleeves=active_sleeves)
+                                           sleeves=active_sleeves,
+                                           sector_cap_pct=sector_cap_pct,
+                                           use_vol_scaling=use_vol_scaling)
 
         self.use_pyramiding        = use_pyramiding
         self.pyramid_min_days      = pyramid_min_days
         self.pyramid_risk_fraction = pyramid_risk_fraction
+        self.dd_pause_pct          = dd_pause_pct
 
         # Pending signals: {sleeve: {instrument: SignalResult}}
         self.pending: Dict[str, Dict[str, SignalResult]] = {s: {} for s in active_sleeves}
@@ -385,6 +415,10 @@ class EnsemblePortfolioEngine:
         print(f"\nRunning ensemble {self.start.date()} -> {self.end.date()} "
               f"({len(self.active_instruments)} instruments, {n_sl} sleeves)...")
 
+        hwm               = self.initial_equity
+        dd_paused         = False   # gate state carried from previous EOD
+        self._dd_pause_days = 0
+
         for date in trading_days:
             date = pd.Timestamp(date)
 
@@ -402,17 +436,23 @@ class EnsemblePortfolioEngine:
             closed_today = 0
 
             # ── 1. Execute pending signals at today's open (priority order) ───
-            for sleeve in self.risk.sleeves:
-                for name in list(self.pending[sleeve]):
-                    sig = self.pending[sleeve].pop(name)
-                    bar = d1_bars.get(name)
-                    if bar is None:
-                        continue
-                    sig.entry_price = float(bar["open"])
-                    sig.date        = date
-                    trade = self.risk.open_trade(sleeve, sig)
-                    if trade is not None:
-                        new_today += 1
+            if not dd_paused:
+                for sleeve in self.risk.sleeves:
+                    for name in list(self.pending[sleeve]):
+                        sig = self.pending[sleeve].pop(name)
+                        bar = d1_bars.get(name)
+                        if bar is None:
+                            continue
+                        sig.entry_price = float(bar["open"])
+                        sig.date        = date
+                        trade = self.risk.open_trade(sleeve, sig)
+                        if trade is not None:
+                            new_today += 1
+            else:
+                # Flush stale pending signals — don't carry them into recovery
+                for sleeve in self.risk.sleeves:
+                    self.pending[sleeve].clear()
+                self._dd_pause_days += 1
 
             # ── 2. Update trailing stops for all sleeves ──────────────────────
             for sleeve in self.risk.sleeves:
@@ -445,18 +485,24 @@ class EnsemblePortfolioEngine:
                     self.risk.open_trades[sleeve].remove(t)
 
             # ── 3. Generate signals → queue for tomorrow ──────────────────────
-            for sleeve in self.risk.sleeves:
-                signals = self.signal_engines[sleeve].get_signals(date)
-                for name, sig in signals.items():
-                    if sig is None:
-                        continue
-                    # Queue only if: no open trade in this sleeve + not already pending
-                    if (not self.risk.sleeve_has_open(sleeve, name)
-                            and name not in self.pending[sleeve]):
-                        self.pending[sleeve][name] = sig
+            if not dd_paused:
+                for sleeve in self.risk.sleeves:
+                    signals = self.signal_engines[sleeve].get_signals(date)
+                    for name, sig in signals.items():
+                        if sig is None:
+                            continue
+                        # Queue only if: no open trade in this sleeve + not already pending
+                        if (not self.risk.sleeve_has_open(sleeve, name)
+                                and name not in self.pending[sleeve]):
+                            self.pending[sleeve][name] = sig
 
-            # ── 4. MTM snapshot ───────────────────────────────────────────────
+            # ── 4. MTM snapshot + HWM / pause gate ───────────────────────────
             total_val = self.risk.mark_to_market(d1_bars)
+            hwm = max(hwm, total_val)
+            if self.dd_pause_pct > 0.0 and hwm > 0:
+                current_dd = (hwm - total_val) / hwm
+                dd_paused  = current_dd > self.dd_pause_pct
+
             self._snapshots.append(DailySnapshot(
                 date         = date,
                 equity       = self.risk.equity,
@@ -497,6 +543,10 @@ class EnsemblePortfolioEngine:
             "closed_trades": s.closed_trades,
         } for s in self._snapshots]
         return pd.DataFrame(rows).set_index("date")
+
+    def get_sector_cap_rejections(self) -> Dict[str, int]:
+        """Return per-sector count of trades rejected by the sector cap gate."""
+        return dict(self.risk.sector_cap_rejections)
 
     def get_trades_df(self) -> pd.DataFrame:
         rows = []
