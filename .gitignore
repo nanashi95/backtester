@@ -19,6 +19,10 @@ venv/
 # Project outputs (generated artifacts)
 output/
 cache/
+
+# Live system runtime files (machine-specific, change every day)
+live/state.json
+live/output/
 equity_curve.csv
 trades.csv
 metrics_summary.txt
