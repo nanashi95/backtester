@@ -60,6 +60,7 @@ from live.config import (
     ACCOUNT_CURRENCY, make_strategies,
 )
 from live.state import default_state, load_state, save_state
+from live.notifier import build_message, send_notification
 
 from engine.signal_engine import SignalEngine, precompute_indicators
 
@@ -455,6 +456,26 @@ def cmd_run(date_override: Optional[str], save_report: bool) -> None:
     for pos in state["open_positions"]:
         pos.pop("_stop_changed", None)
     save_state(STATE_PATH, state)
+
+    # ── Telegram notification ─────────────────────────────────────────────────
+    accepted      = [s for s in signals if not s["rejected"]]
+    stop_updates  = [
+        f"{p['instrument']} [{p['sleeve']}]  → new stop {p['trailing_stop']:.4f}"
+        for p in state["open_positions"]
+        if p.get("_stop_changed")
+    ]
+    msg = build_message(
+        today_str    = str(today.date()),
+        equity_eur   = state["equity"],
+        open_r       = sum(p["r_risked"] for p in state["open_positions"]),
+        global_cap   = GLOBAL_CAP,
+        signals      = accepted,
+        stop_alerts  = stop_alerts,
+        stop_updates = stop_updates,
+    )
+    sent = send_notification(msg)
+    if sent:
+        print("  Telegram notification sent.")
 
     # ── Output ────────────────────────────────────────────────────────────────
     output_path = (
